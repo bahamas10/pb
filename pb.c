@@ -34,6 +34,7 @@ static int g_columns = 80;
 static int g_input_fd = STDIN_FILENO;
 static int g_output_fd = STDOUT_FILENO;
 
+static const int min_columns = 75;
 static const char *GREEN = "\e[32m";
 static const char *DIM = "\e[2m";
 static const char *RST = "\e[0m";
@@ -287,6 +288,9 @@ static void render_progress() {
 
 	prev_copied = cur_copied;
 
+    // I would have loved to intend this
+    // I shall not to avoid whitespace changes
+    if (g_columns >= min_columns) {
 	// move the cursor and draw the blocks
 	restore_cursor();
 	fprintf(stderr, "\e[1B\e[1C");
@@ -322,6 +326,19 @@ static void render_progress() {
 	restore_cursor();
 	fprintf(stderr, "\e[6B");
 	fflush(stderr);
+    } else {
+    restore_cursor();
+
+    // Just print stats if too narrow
+    fprintf(stderr, "! Minimum %d columns required !", min_columns);
+    fprintf(stderr, "%llu%%\n---\n", pct_copied);
+    fprintf(stderr, "total: %s\n", format_total(total));
+    fprintf(stderr, "speed: %s\n", format_speed(speed));
+    fprintf(stderr, "ets: %s\n", format_eta(eta));
+
+    restore_cursor();
+    fprintf(stderr, "\e[6B");
+    }
 }
 
 static void repeat_text(const char *s, int times) {
@@ -339,6 +356,10 @@ static void draw_static_ui() {
 	const char *NW = "┘";
 	const char *SWE = "┬";
 	const char *NWE = "┴";
+
+    if (g_columns < min_columns) {
+        return;
+    }
 
 	restore_cursor();
 
