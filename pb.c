@@ -13,15 +13,16 @@
  */
 
 #include <errno.h>
-#include <sys/ioctl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 static atomic_bool g_done = false;
@@ -420,9 +421,22 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 
-	// thread is running - display the stats until the thread is done
-	signal(SIGWINCH, handle_sigwinch);
+	// -- thread is running - display the stats until the thread is done
+    
+    // Handle window sizing events
+    struct sigaction sa;
+    sa.sa_handler = handle_sigwinch;
+    if (sigemptyset(&sa.sa_mask) == -1) {
+        perror("sigemptyset");
+        return EXIT_FAILURE;
+    }
+    sa.sa_flags = 0; // Explicitly ensure no restart flags interfere
+	sigaction(SIGWINCH, &sa, NULL);
 	get_window_size();
+
+    // Setup nanosleep
+    struct timespec req = { .tv_sec = 1, .tv_nsec = 0 };
+    struct timespec rem;
 
 	// make room for our display before saving cursor
 	fprintf(stderr, "\n\n\n\n\n\n");
@@ -432,16 +446,18 @@ int main(int argc, char **argv) {
 	draw_static_ui();
 
 	while (!atomic_load(&g_done)) {
-		if (g_needs_resize) {
-			get_window_size();
-			g_needs_resize = 0;
-			clear_old_screen();
-			draw_static_ui();
-		}
-
 		render_progress();
-		sleep(1);
-	}
+
+        // Using `nanosleep` as it gets interrupted on configured events
+	    nanosleep(&req, &rem);
+
+        if (g_needs_resize) {
+            int lines = get_window_size();
+            clear_old_screen(lines);
+            draw_static_ui();
+            g_needs_resize = 0;
+        }
+    }
 	render_progress();
 
 	// wait for the thread to finish
