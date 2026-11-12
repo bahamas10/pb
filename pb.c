@@ -158,49 +158,68 @@ static void restore_cursor() {
 	fprintf(stderr, "\e[u");
 }
 
+static bool did_read(int fd, void *buf, size_t count, ssize_t *bytes_read) {
+  // read some data
+  ssize_t n_read = read(fd, buf, count);
+
+  if (n_read == 0) {
+    // done reading
+    return false;
+  }
+
+  if (n_read == -1) {
+    // error
+    if (errno == EINTR) {
+      // try again
+      return did_read(fd, buf, count, bytes_read);
+    }
+
+    perror("read");
+    exit(EXIT_FAILURE);
+  }
+
+  // set bytes_read if the pointer is not NULL
+  if (bytes_read != NULL) {
+    *bytes_read = n_read;
+  }
+
+  // we are not done reading yet
+  return true;
+}
+
+static void write_all(int fd, const void *buf, size_t count) {
+  size_t offset = 0;
+
+  while (offset < count) {
+    ssize_t n_write = write(fd, (const char *)buf + offset, count - offset);
+
+    if (n_write == -1) {
+      // error
+      if (errno == EINTR) {
+        continue;
+      }
+
+      perror("write");
+      exit(EXIT_FAILURE);
+    }
+
+    offset += n_write;
+
+    atomic_fetch_add(&g_bytes_copied, (unsigned long long)n_write);
+  }
+}
+
 static void *worker_thread(void *arg) {
 	unsigned char buf[BUFSIZ];
 
-	while (true) {
-		// read some data
-		ssize_t n_read = read(g_input_fd, buf, sizeof (buf));
-		if (n_read == 0) {
-			// done reading
-			break;
-		} else if (n_read == -1) {
-			// error
-			if (errno == EINTR) {
-				continue;
-			}
+  // start reading from the input and writing to the output
+  ssize_t bytes_read;
+  while (did_read(g_input_fd, buf, sizeof(buf), &bytes_read)) {
+    // write the data to the output
+    write_all(g_output_fd, buf, bytes_read);
+  }
 
-			perror("read");
-			goto done;
-		}
-
-		// write some data
-		ssize_t offset = 0;
-		while (offset < n_read) {
-			ssize_t n_write = write(g_output_fd, buf + offset,
-			    n_read - offset);
-
-			if (n_write == -1) {
-				// error
-				if (errno == EINTR) {
-					continue;
-				}
-
-				perror("write");
-				goto done;
-			}
-
-			offset += n_write;
-
-			atomic_fetch_add(&g_bytes_copied,
-			    (unsigned long long)n_write);
-		}
-	}
-
-done:
+  // done
 	atomic_store(&g_done, true);
 	return NULL;
 }
