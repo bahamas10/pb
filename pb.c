@@ -280,7 +280,8 @@ static void render_progress() {
 
 	// calculate eta
 	unsigned long long bytes_left = total - cur_copied;
-	unsigned long long eta = bytes_left / delta;
+    // Delta can be zero sometimes
+	unsigned long long eta = delta == 0 ? 0 : bytes_left / delta;
 
 	unsigned long long speed = delta / 1; // 1 == samples per second
 
