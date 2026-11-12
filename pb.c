@@ -13,6 +13,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <sys/ioctl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -257,8 +258,14 @@ static void render_progress() {
 	unsigned long long cur_copied = atomic_load(&g_bytes_copied);
 	unsigned long long total = g_bytes_total;
 
-	// note: could overflow
+	// note: could overflow without 64 bit GCC
+	#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L && BITINT_MAXWIDTH >= 128
+	unsigned long long pct_copied = ((unsigned _BitInt(128))cur_copied * 100) / total;
+	#elif defined(__GNUC__) && defined(__SIZEOF_INT128__)
+	unsigned long long pct_copied = ((__uint128_t)cur_copied * 100) / total;
+	#else
 	unsigned long long pct_copied = (cur_copied * 100) / total;
+	#endif
 
 	// calculate speed
 	unsigned long long delta = cur_copied - prev_copied;
