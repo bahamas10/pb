@@ -42,14 +42,28 @@ void handle_sigwinch(int sig) {
 	g_needs_resize = 1;
 }
 
-void get_window_size() {
+int get_window_size() {
 	struct winsize ws;
 
 	if (ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == -1) {
-		return;
+		return -1;
 	}
 
+    int old_columns = g_columns;
 	g_columns = ws.ws_col;
+    // Validate columns
+    g_columns = g_columns < 1 ? 1 : g_columns;
+
+    // If terminal grew, no extra lines to clear
+    if (g_columns >= old_columns) {
+        return 6;
+    }
+    // If terminal shrank, calucalte extra lines to clear
+    int excess_lines = (old_columns - 1) / g_columns;
+
+    // Each lines get the extra lines so we multiply
+    // Eg. 6 lines with an extra 2 becomes 6*(2+1)=18 lines
+    return 6 * (excess_lines + 1);
 }
 
 enum Number {
@@ -374,10 +388,10 @@ static void draw_static_ui() {
 	fprintf(stderr, "%s", RST);
 }
 
-void clear_old_screen() {
+void clear_old_screen(int lines) {
 	restore_cursor();
 
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < lines; i++) {
 		fprintf(stderr, "\e[2K\e[1B");
 	}
 	fflush(stderr);
