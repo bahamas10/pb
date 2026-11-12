@@ -160,6 +160,7 @@ static void restore_cursor() {
 
 static void *worker_thread(void *arg) {
 	unsigned char buf[BUFSIZ];
+	bool write_error = false;
 
 	while (true) {
 		// read some data
@@ -174,9 +175,9 @@ static void *worker_thread(void *arg) {
 			}
 
 			perror("read");
-			goto done;
+			//break loop on error
+			break;
 		}
-
 		// write some data
 		ssize_t offset = 0;
 		while (offset < n_read) {
@@ -190,7 +191,9 @@ static void *worker_thread(void *arg) {
 				}
 
 				perror("write");
-				goto done;
+				// set error flag on write error and break out of loop
+				write_error = true;
+				break;
 			}
 
 			offset += n_write;
@@ -198,9 +201,12 @@ static void *worker_thread(void *arg) {
 			atomic_fetch_add(&g_bytes_copied,
 			    (unsigned long long)n_write);
 		}
+		if (write_error) {
+			// break larger loop on write error
+			break;
+		}
 	}
 
-done:
 	atomic_store(&g_done, true);
 	return NULL;
 }
@@ -253,22 +259,22 @@ void print_percent(unsigned long long pct) {
 
 static void render_progress() {
 	static unsigned long long prev_copied = 0;
-
 	unsigned long long cur_copied = atomic_load(&g_bytes_copied);
 	unsigned long long total = g_bytes_total;
-
+	
 	// note: could overflow
 	unsigned long long pct_copied = (cur_copied * 100) / total;
-
-	// calculate speed
+	
 	unsigned long long delta = cur_copied - prev_copied;
-
-	// calculate eta
+	
 	unsigned long long bytes_left = total - cur_copied;
-	unsigned long long eta = bytes_left / delta;
+	unsigned long long eta = 0;
+	if (delta > 0) {
+		eta = bytes_left / delta;
+	}
 
 	unsigned long long speed = delta / 1; // 1 == samples per second
-
+    
 	prev_copied = cur_copied;
 
 	// move the cursor and draw the blocks
@@ -287,7 +293,6 @@ static void render_progress() {
 	int spaces = (g_columns - 3) / 4;
 
 	fprintf(stderr, "%s", GREEN);
-
 	// print percent first
 	fprintf(stderr, "\e[1C");
 	print_percent(pct_copied);
@@ -302,7 +307,6 @@ static void render_progress() {
 	fprintf(stderr, "%-*s", spaces - 2, format_eta(eta));
 
 	fprintf(stderr, "%s", RST);
-
 	restore_cursor();
 	fprintf(stderr, "\e[6B");
 	fflush(stderr);
@@ -406,7 +410,6 @@ int main(int argc, char **argv) {
 			return EXIT_FAILURE;
 		}
 	}
-
 	if (g_bytes_total == 0) {
 		fprintf(stderr, "total size cannot be 0\n");
 		return EXIT_FAILURE;
@@ -419,11 +422,9 @@ int main(int argc, char **argv) {
 		perror("pthread_create");
 		return EXIT_FAILURE;
 	}
-
 	// thread is running - display the stats until the thread is done
 	signal(SIGWINCH, handle_sigwinch);
 	get_window_size();
-
 	// make room for our display before saving cursor
 	fprintf(stderr, "\n\n\n\n\n\n");
 	fflush(stderr);
@@ -438,7 +439,6 @@ int main(int argc, char **argv) {
 			clear_old_screen();
 			draw_static_ui();
 		}
-
 		render_progress();
 		sleep(1);
 	}
@@ -451,7 +451,6 @@ int main(int argc, char **argv) {
 		perror("pthread_join");
 		return EXIT_FAILURE;
 	}
-
 	//fprintf(stderr, "\n");
 
 	return EXIT_SUCCESS;
