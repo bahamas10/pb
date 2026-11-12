@@ -13,15 +13,16 @@
  */
 
 #include <errno.h>
-#include <sys/ioctl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 static atomic_bool g_done = false;
@@ -33,6 +34,7 @@ static int g_columns = 80;
 static int g_input_fd = STDIN_FILENO;
 static int g_output_fd = STDOUT_FILENO;
 
+static const int min_columns = 75;
 static const char *GREEN = "\e[32m";
 static const char *DIM = "\e[2m";
 static const char *RST = "\e[0m";
@@ -41,14 +43,28 @@ void handle_sigwinch(int sig) {
 	g_needs_resize = 1;
 }
 
-void get_window_size() {
+int get_window_size() {
 	struct winsize ws;
 
 	if (ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == -1) {
-		return;
+		return -1;
 	}
 
+    int old_columns = g_columns;
 	g_columns = ws.ws_col;
+    // Validate columns
+    g_columns = g_columns < 1 ? 1 : g_columns;
+
+    // If terminal grew, no extra lines to clear
+    if (g_columns >= old_columns) {
+        return 6;
+    }
+    // If terminal shrank, calucalte extra lines to clear
+    int excess_lines = (old_columns - 1) / g_columns;
+
+    // Each lines get the extra lines so we multiply
+    // Eg. 6 lines with an extra 2 becomes 6*(2+1)=18 lines
+    return 6 * (excess_lines + 1);
 }
 
 enum Number {
@@ -265,12 +281,16 @@ static void render_progress() {
 
 	// calculate eta
 	unsigned long long bytes_left = total - cur_copied;
-	unsigned long long eta = bytes_left / delta;
+    // Delta can be zero sometimes
+	unsigned long long eta = delta == 0 ? 0 : bytes_left / delta;
 
 	unsigned long long speed = delta / 1; // 1 == samples per second
 
 	prev_copied = cur_copied;
 
+    // I would have loved to intend this
+    // I shall not to avoid whitespace changes
+    if (g_columns >= min_columns) {
 	// move the cursor and draw the blocks
 	restore_cursor();
 	fprintf(stderr, "\e[1B\e[1C");
@@ -306,6 +326,19 @@ static void render_progress() {
 	restore_cursor();
 	fprintf(stderr, "\e[6B");
 	fflush(stderr);
+    } else {
+    restore_cursor();
+
+    // Just print stats if too narrow
+    fprintf(stderr, "! Minimum %d columns required !", min_columns);
+    fprintf(stderr, "%llu%%\n---\n", pct_copied);
+    fprintf(stderr, "total: %s\n", format_total(total));
+    fprintf(stderr, "speed: %s\n", format_speed(speed));
+    fprintf(stderr, "ets: %s\n", format_eta(eta));
+
+    restore_cursor();
+    fprintf(stderr, "\e[6B");
+    }
 }
 
 static void repeat_text(const char *s, int times) {
@@ -323,6 +356,10 @@ static void draw_static_ui() {
 	const char *NW = "╯";
 	const char *SWE = "┬";
 	const char *NWE = "┴";
+
+    if (g_columns < min_columns) {
+        return;
+    }
 
 	restore_cursor();
 
@@ -373,10 +410,10 @@ static void draw_static_ui() {
 	fprintf(stderr, "%s", RST);
 }
 
-void clear_old_screen() {
+void clear_old_screen(int lines) {
 	restore_cursor();
 
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < lines; i++) {
 		fprintf(stderr, "\e[2K\e[1B");
 	}
 	fflush(stderr);
@@ -420,9 +457,22 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 
-	// thread is running - display the stats until the thread is done
-	signal(SIGWINCH, handle_sigwinch);
+	// -- thread is running - display the stats until the thread is done
+    
+    // Handle window sizing events
+    struct sigaction sa;
+    sa.sa_handler = handle_sigwinch;
+    if (sigemptyset(&sa.sa_mask) == -1) {
+        perror("sigemptyset");
+        return EXIT_FAILURE;
+    }
+    sa.sa_flags = 0; // Explicitly ensure no restart flags interfere
+	sigaction(SIGWINCH, &sa, NULL);
 	get_window_size();
+
+    // Setup nanosleep
+    struct timespec req = { .tv_sec = 1, .tv_nsec = 0 };
+    struct timespec rem;
 
 	// make room for our display before saving cursor
 	fprintf(stderr, "\n\n\n\n\n\n");
@@ -432,16 +482,18 @@ int main(int argc, char **argv) {
 	draw_static_ui();
 
 	while (!atomic_load(&g_done)) {
-		if (g_needs_resize) {
-			get_window_size();
-			g_needs_resize = 0;
-			clear_old_screen();
-			draw_static_ui();
-		}
-
 		render_progress();
-		sleep(1);
-	}
+
+        // Using `nanosleep` as it gets interrupted on configured events
+	    nanosleep(&req, &rem);
+
+        if (g_needs_resize) {
+            int lines = get_window_size();
+            clear_old_screen(lines);
+            draw_static_ui();
+            g_needs_resize = 0;
+        }
+    }
 	render_progress();
 
 	// wait for the thread to finish
