@@ -13,6 +13,7 @@
  */
 
 #include <errno.h>
+#include "pb.h"
 #include <sys/ioctl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -23,6 +24,12 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <string.h>
+
+enum Font {
+	DOTS = 0,
+	BLOCKS,
+};
 
 static atomic_bool g_done = false;
 static atomic_ullong g_bytes_copied = 0;
@@ -32,6 +39,7 @@ volatile sig_atomic_t g_needs_resize = 0;
 static int g_columns = 80;
 static int g_input_fd = STDIN_FILENO;
 static int g_output_fd = STDOUT_FILENO;
+static enum Font g_font = DOTS;
 
 static const char *GREEN = "\e[32m";
 static const char *DIM = "\e[2m";
@@ -67,46 +75,10 @@ enum Number {
 };
 
 void print_big_number(int i) {
-	static const char *font[][2] = {
-		{"█▀█",
-		 "█▄█"},
-
-		{"▀█ ",
-		 "▄█▄"},
-
-		{"▀▀█",
-		 "██▄"},
-
-		{"▀▀█",
-		 "▄██"},
-
-		{"█ █",
-		 " ▀█"},
-
-		{"█▀▀",
-		 "▄▄█"},
-
-		{"█▀▀",
-		 "█▄█"},
-
-		{"▀▀█",
-		 " █ "},
-
-		{"█▀█",
-		 "███"},
-
-		{"█▀█",
-		 "▀▀█"},
-
-		{"▀▄▀",
-		 "▀ ▀"},
-
-		{"   ",
-		 "   "},
-	};
-	fprintf(stderr, "%s", font[i][0]);
+	
+	fprintf(stderr, "%s", font[g_font][i][0]);
 	fprintf(stderr, "\e[1B\e[3D");
-	fprintf(stderr, "%s", font[i][1]);
+	fprintf(stderr, "%s", font[g_font][i][1]);
 	fprintf(stderr, "\e[1A\e[1C");
 }
 
@@ -387,7 +359,7 @@ int main(int argc, char **argv) {
 
 	// grab arguments from the user
 	int opt;
-	while ((opt = getopt(argc, argv, "s:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:f:")) != -1) {
 		switch (opt) {
 		case 's': {
 			// size argument
@@ -396,6 +368,19 @@ int main(int argc, char **argv) {
 			g_bytes_total = strtoull(optarg, &end, 10);
 			if (errno != 0 || *end != '\0') {
 				fprintf(stderr, "invalid size: %s\n",
+				    optarg);
+				return EXIT_FAILURE;
+			}
+			break;
+		}
+		case 'f': {
+			// font argument, can be 'dots' or 'blocks', defaulting to 'dots'
+			if (strcmp(optarg, "dots") == 0) {
+				// this is the default value, nothing to do
+			} else if (strcmp(optarg, "blocks") == 0) {
+				g_font = BLOCKS;
+			} else {
+				fprintf(stderr, "invalid font: %s\n",
 				    optarg);
 				return EXIT_FAILURE;
 			}
