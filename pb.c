@@ -24,7 +24,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
-
+#include <string.h>
 
 enum Font {
 	DOTS = 0,
@@ -375,21 +375,12 @@ int main(int argc, char **argv) {
 		}
 		case 'f': {
 			// font argument, can be 'dots' or 'blocks', defaulting to 'dots'
-			switch (optarg)
-			{
-			case "dots":
+			if (strcmp(optarg, "dots") == 0) {
 				// this is the default value, nothing to do
-				break;
-			case "blocks":
+			} else if (strcmp(optarg, "blocks") == 0) {
 				g_font = BLOCKS;
-				break;
-			default:
-				perror("bad font option");
-				break;
-			}
-			g_bytes_total = strtoull(optarg, &end, 10);
-			if (errno != 0 || *end != '\0') {
-				fprintf(stderr, "invalid size: %s\n",
+			} else {
+				fprintf(stderr, "invalid font: %s\n",
 				    optarg);
 				return EXIT_FAILURE;
 			}
